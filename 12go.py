@@ -10,7 +10,7 @@ import sys
 
 # --- Configuration ---
 DB_CONN_STRING = os.environ.get("DATABASE_URL", "postgresql://neondb_owner:npg_a6Uvfm7KcpYE@ep-orange-mouse-adzb7p97-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require")
-DAYS = 1
+DAYS = 30
 CONCURRENCY = 5
 try:
     routes_data = json.load(open("routes_id.json", encoding="utf-8"))
