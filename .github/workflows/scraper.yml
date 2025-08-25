@@ -3,7 +3,7 @@ name: Run Scraper
 on:
   schedule:
     # This cron schedule runs at 3:00 AM every day
-    - cron: '0 3 * * *' 
+    - cron: '30 21 * * *' 
   workflow_dispatch: # This is the line you need to add
 
 jobs:
