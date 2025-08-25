@@ -9,14 +9,14 @@ import os
 import sys
 
 # --- Configuration ---
-DB_CONN_STRING = os.environ.get("DATABASE_URL", "postgresql://neondb_owner:npg_a6Uvfm7KcpYE@ep-orange-mouse-adzb7p97-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require")
+DB_CONN_STRING = os.environ.get("DATABASE_URL")
 DAYS = 30
 CONCURRENCY = 5
 try:
     routes_data = json.load(open("routes_id.json", encoding="utf-8"))
 except FileNotFoundError:
     print("Error: routes_id.json not found. Please create this file.")
-    exit()
+    sys.exit(1)
 
 BROWSER_HEADERS = {
     "accept": "*/*",
@@ -46,41 +46,14 @@ HARDCODED_RATES = {
 # --- Helper Functions ---
 def get_db_connection():
     """Establishes and returns a database connection."""
-    return psycopg2.connect(DB_CONN_STRING)
-
-def update_job_status(job_id, status, total_records=None, processed_records=None, end_time=None):
-    """
-    Updates the status of the scraping job in the database.
-    """
-    conn = None
+    if not DB_CONN_STRING:
+        print("Error: DATABASE_URL environment variable is not set.")
+        return None
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        update_query = "UPDATE scraper_jobs SET status = %s, last_updated = %s"
-        params = [status, datetime.now()]
-
-        if total_records is not None:
-            update_query += ", total_records = %s"
-            params.append(total_records)
-        if processed_records is not None:
-            update_query += ", processed_records = %s"
-            params.append(processed_records)
-        if end_time is not None:
-            update_query += ", end_time = %s"
-            params.append(end_time)
-
-        update_query += " WHERE id = %s;"
-        params.append(job_id)
-        
-        cur.execute(update_query, tuple(params))
-        conn.commit()
-
-    except (Exception, psycopg2.DatabaseError) as error:
-        print(f"Error updating job status for ID {job_id}: {error}")
-    finally:
-        if conn:
-            conn.close()
+        return psycopg2.connect(DB_CONN_STRING)
+    except psycopg2.DatabaseError as e:
+        print(f"Error connecting to the database: {e}")
+        return None
 
 def get_exchange_rate_url(base_currency):
     return f"https://open.er-api.com/v6/latest/{base_currency}?symbols=INR"
@@ -153,7 +126,6 @@ def parse_duration_minutes(v):
         pass
     return None
 
-
 # --- Main Scraper & Data Processor ---
 async def fetch_route(session: aiohttp.ClientSession, route, date_str, sem, results, rates):
     async with sem:
@@ -169,7 +141,6 @@ async def fetch_route(session: aiohttp.ClientSession, route, date_str, sem, resu
             f"fromId={from_id}p&toId={to_id}p&fromSlug={from_slug}&toSlug={to_slug}"
             f"&people=1&date={date_str}&date2=undefined&csrf=&direction=forward"
         )
-        # print(f"Fetching: {from_city} -> {to_city} on {date_str}")
 
         try:
             async with session.get(api_url, headers=BROWSER_HEADERS) as resp:
@@ -278,11 +249,10 @@ async def fetch_route(session: aiohttp.ClientSession, route, date_str, sem, resu
                 "provider": "12go",
             })
 
-async def main(job_id):
+async def main():
+    start_time = time.time()
+    print("Scraper started...")
     results = []
-    
-    # --- Update job status: RUNNING ---
-    update_job_status(job_id, "RUNNING")
     
     sem = asyncio.Semaphore(CONCURRENCY)
 
@@ -307,17 +277,11 @@ async def main(job_id):
                 date_str = (datetime.now() + timedelta(days=day_offset)).strftime('%Y-%m-%d')
                 tasks.append(fetch_route(session, route, date_str, sem, results, rates))
         
-        # Calculate the total number of expected trips for progress tracking
-        total_expected_trips = len(tasks)
-        
-        # --- Update job status: total_records ---
-        update_job_status(job_id, "RUNNING", total_records=total_expected_trips)
-
+        print(f"Fetching data for {len(tasks)} routes over {DAYS} days...")
         await asyncio.gather(*tasks)
 
     # --- Database Insertion Logic ---
     if not results:
-        update_job_status(job_id, "COMPLETED_WITH_NO_DATA", total_records=total_expected_trips, processed_records=0, end_time=datetime.now())
         print("❌ ERROR: The list of scraped records is empty. No data to insert.")
         return
 
@@ -325,6 +289,9 @@ async def main(job_id):
     try:
         print("Connecting to the database...")
         conn = get_db_connection()
+        if not conn:
+            return
+            
         cur = conn.cursor()
 
         print("Truncating the trips table to delete data and reset the ID sequence...")
@@ -353,7 +320,6 @@ async def main(job_id):
         
         print(f"Importing {len(records_to_insert)} new records...")
         
-        # Update progress in chunks
         chunk_size = 1000
         for i in range(0, len(records_to_insert), chunk_size):
             chunk = records_to_insert[i:i + chunk_size]
@@ -366,30 +332,20 @@ async def main(job_id):
             ) VALUES %s
             """, chunk, page_size=chunk_size)
             conn.commit()
-            
-            # --- Update job status: processed_records ---
-            update_job_status(job_id, "RUNNING", processed_records=i + len(chunk))
+            print(f"Processed {i + len(chunk)} records...")
         
-        # --- Update job status: COMPLETED ---
-        update_job_status(job_id, "COMPLETED", processed_records=len(records_to_insert), end_time=datetime.now())
-        print(f"✅ Import completed! Imported {len(records_to_insert)} records.")
+        end_time = time.time()
+        duration = end_time - start_time
+        print(f"✅ Import completed! Imported {len(records_to_insert)} records in {duration:.2f} seconds.")
 
     except (Exception, psycopg2.DatabaseError) as error:
         print(f"Error during database operation: {error}")
-        # --- Update job status: FAILED ---
-        update_job_status(job_id, "FAILED", end_time=datetime.now())
         if conn:
             conn.rollback()
     finally:
         if conn:
-            cur.close()
             conn.close()
             print("Database connection closed. 👋")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Error: A job ID must be provided as an argument.")
-        sys.exit(1)
-    
-    job_id = int(sys.argv[1])
-    asyncio.run(main(job_id))
+    asyncio.run(main())
