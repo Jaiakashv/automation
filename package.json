@@ -1,0 +1,19 @@
+{
+  "name": "automation",
+  "version": "1.0.0",
+  "description": "",
+  "main": "12go.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "dotenv": "^17.2.1",
+    "node-fetch": "^2.7.0",
+    "p-limit": "^7.1.0",
+    "pg": "^8.16.3"
+  }
+}
